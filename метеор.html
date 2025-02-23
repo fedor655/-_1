@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meteor Recorder</title>
+</head>
+<body>
+    <h1>Meteor Camera Recorder</h1>
+    <video id="preview" autoplay playsinline></video>
+    <button id="start">Start Recording</button>
+    <button id="stop" disabled>Stop Recording</button>
+    <p id="log"></p>
+    
+    <script>
+        const logElement = document.getElementById('log');
+        function log(message) {
+            logElement.textContent += message + '\n';
+            console.log(message);
+        }
+
+        let mediaRecorder;
+        let recordedChunks = [];
+        let metadata = {};
+
+        async function requestPermissions() {
+            try {
+                log("Requesting camera permission...");
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                log("Camera permission granted.");
+                stream.getTracks().forEach(track => track.stop()); // Останавливаем поток, чтобы не блокировать камеру
+
+                log("Requesting geolocation permission...");
+                await new Promise((resolve, reject) => {
+                    navigator.geolocation.getCurrentPosition(
+                        () => resolve(),
+                        err => reject(err),
+                        { timeout: 10000 }
+                    );
+                });
+                log("Geolocation permission granted.");
+
+                if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    log("Requesting sensor permission...");
+                    const permission = await DeviceOrientationEvent.requestPermission();
+                    if (permission === 'granted') {
+                        log("Sensor permission granted.");
+                    } else {
+                        log("Sensor permission denied.");
+                    }
+                } else {
+                    log("Sensors available without explicit permission or not supported.");
+                }
+            } catch (error) {
+                log(`Permission request failed: ${error.message}`);
+                alert("Please grant camera, location, and sensor permissions in your browser settings.");
+                throw error;
+            }
+        }
+
+        async function startRecording() {
+            try {
+                log("Starting recording...");
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                document.getElementById('preview').srcObject = stream;
+                
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8' });
+                mediaRecorder.ondataavailable = event => recordedChunks.push(event.data);
+                mediaRecorder.onstop = saveRecording;
+                
+                metadata.startTime = new Date().toISOString();
+                navigator.geolocation.getCurrentPosition(
+                    position => {
+                        metadata.latitude = position.coords.latitude;
+                        metadata.longitude = position.coords.longitude;
+                        log(`Geolocation: ${metadata.latitude}, ${metadata.longitude}`);
+                    },
+                    err => log(`Geolocation error: ${err.message}`)
+                );
+                
+                window.addEventListener('deviceorientation', event => {
+                    metadata.azimuth = event.alpha;
+                    metadata.elevation = event.beta;
+                    log(`Orientation: azimuth=${event.alpha}, elevation=${event.beta}`);
+                }, { once: true });
+                
+                mediaRecorder.start();
+                log("Recording started.");
+                document.getElementById('start').disabled = true;
+                document.getElementById('stop').disabled = false;
+            } catch (error) {
+                log(`Error starting recording: ${error.message}`);
+            }
+        }
+
+        function stopRecording() {
+            mediaRecorder.stop();
+            document.getElementById('start').disabled = false;
+            document.getElementById('stop').disabled = true;
+            log("Recording stopped.");
+        }
+
+        function saveRecording() {
+            const blob = new Blob(recordedChunks, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'meteor_video.webm';
+            a.click();
+            
+            const metadataBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
+            const metadataUrl = URL.createObjectURL(metadataBlob);
+            const metadataLink = document.createElement('a');
+            metadataLink.href = metadataUrl;
+            metadataLink.download = 'metadata.json';
+            metadataLink.click();
+            log("Files saved.");
+        }
+
+        document.getElementById('start').addEventListener('click', async () => {
+            try {
+                await requestPermissions();
+                await startRecording();
+            } catch (error) {
+                log("Failed to start: " + error.message);
+            }
+        });
+        document.getElementById('stop').addEventListener('click', stopRecording);
+    </script>
+</body>
+</html>
