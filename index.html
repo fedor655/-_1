@@ -3,118 +3,127 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Акселерометр</title>
+    <title>Запись видео</title>
     <style>
         body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background-color: #f4f4f4;
             font-family: Arial, sans-serif;
-            text-align: center;
-            padding: 20px;
+        }
+        video {
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
         }
         button {
+            margin: 10px;
             padding: 10px 20px;
-            margin: 5px;
             font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
         }
-        #dataOutput {
-            margin-top: 20px;
-            font-size: 18px;
+        #start {
+            background-color: #4CAF50;
+            color: white;
+        }
+        #stop {
+            background-color: #f44336;
+            color: white;
+        }
+        #start:disabled, #stop:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
         }
     </style>
 </head>
 <body>
-    <h1>Сбор данных с акселерометра</h1>
-    <button onclick="startCollecting()">Начать сбор</button>
-    <button onclick="stopCollecting()">Остановить</button>
-    <button onclick="downloadData()">Скачать данные</button>
-    <div id="dataOutput">Ожидание данных...</div>
-
+    <video id="preview" autoplay playsinline></video>
+    <canvas id="canvas" style="display: none;"></canvas>
+    <button id="start">Начать запись</button>
+    <button id="stop" disabled>Остановить запись</button>
     <script>
-        let collecting = false;
-        let motionData = [];
-        let intervalId = null;
+        let mediaRecorder;
+        let recordedChunks = [];
+        let videoStream;
+        let canvas = document.getElementById("canvas");
+        let ctx = canvas.getContext("2d");
+        let outputStream;
+        let canvasStream;
+        let preview = document.getElementById("preview");
 
-        // Проверка поддержки и запрос разрешения
-        function startCollecting() {
-            if (typeof DeviceMotionEvent !== 'undefined') {
-                if (typeof DeviceMotionEvent.requestPermission === 'function') {
-                    // Для iOS 13+
-                    DeviceMotionEvent.requestPermission()
-                        .then(permissionState => {
-                            if (permissionState === 'granted') {
-                                startMotionListener();
-                            } else {
-                                alert('Разрешение на доступ к акселерометру отклонено.');
-                            }
-                        })
-                        .catch(console.error);
-                } else {
-                    // Для Android и других устройств
-                    startMotionListener();
+        document.getElementById("start").addEventListener("click", async () => {
+            videoStream = await navigator.mediaDevices.getUserMedia({ video: { frameRate: 30 }, audio: false });
+            preview.srcObject = videoStream; // Сначала показываем исходный поток
+            
+            let videoTrack = videoStream.getVideoTracks()[0];
+            let settings = videoTrack.getSettings();
+            canvas.width = settings.width;
+            canvas.height = settings.height;
+            
+            canvasStream = canvas.captureStream(30);
+            outputStream = new MediaStream();
+            outputStream.addTrack(canvasStream.getVideoTracks()[0]);
+            
+            mediaRecorder = new MediaRecorder(outputStream, { mimeType: "video/webm;codecs=vp9" });
+            mediaRecorder.ondataavailable = event => recordedChunks.push(event.data);
+            mediaRecorder.onstop = saveVideo;
+            
+            mediaRecorder.start();
+            document.getElementById("start").disabled = true;
+            document.getElementById("stop").disabled = false;
+
+            drawGrayscale(videoStream);
+        });
+
+        document.getElementById("stop").addEventListener("click", () => {
+            mediaRecorder.stop();
+            videoStream.getTracks().forEach(track => track.stop());
+            document.getElementById("start").disabled = false;
+            document.getElementById("stop").disabled = true;
+        });
+
+        function drawGrayscale(stream) {
+            let video = document.createElement("video");
+            video.srcObject = stream;
+            video.play();
+            
+            function processFrame() {
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                let frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                let pixels = frame.data;
+                
+                for (let i = 0; i < pixels.length; i += 4) {
+                    let avg = (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
+                    pixels[i] = pixels[i + 1] = pixels[i + 2] = avg;
                 }
-            } else {
-                alert('Ваш браузер или устройство не поддерживает акселерометр.');
+                ctx.putImageData(frame, 0, 0);
+
+                // Переключаем preview на черно-белый поток после первой обработки
+                if (preview.srcObject !== canvasStream) {
+                    preview.srcObject = canvasStream;
+                }
+
+                requestAnimationFrame(processFrame);
             }
+            requestAnimationFrame(processFrame);
         }
 
-        // Начало сбора данных
-        function startMotionListener() {
-            if (!collecting) {
-                collecting = true;
-                motionData = []; // Очищаем старые данные
-                document.getElementById('dataOutput').innerText = 'Сбор данных начался...';
-
-                window.addEventListener('devicemotion', handleMotion);
-                // Собираем данные каждые 100 мс
-                intervalId = setInterval(() => {
-                    document.getElementById('dataOutput').innerText = 
-                        `Последние данные: X: ${motionData[motionData.length - 1]?.x || 0}, ` +
-                        `Y: ${motionData[motionData.length - 1]?.y || 0}, ` +
-                        `Z: ${motionData[motionData.length - 1]?.z || 0}`;
-                }, 100);
-            }
-        }
-
-        // Обработка данных акселерометра
-        function handleMotion(event) {
-            if (collecting) {
-                const accel = event.accelerationIncludingGravity || {};
-                motionData.push({
-                    time: new Date().toISOString(),
-                    x: accel.x || 0,
-                    y: accel.y || 0,
-                    z: accel.z || 0
-                });
-            }
-        }
-
-        // Остановка сбора
-        function stopCollecting() {
-            if (collecting) {
-                collecting = false;
-                clearInterval(intervalId);
-                window.removeEventListener('devicemotion', handleMotion);
-                document.getElementById('dataOutput').innerText = 'Сбор данных остановлен.';
-            }
-        }
-
-        // Скачивание данных в CSV
-        function downloadData() {
-            if (motionData.length === 0) {
-                alert('Нет данных для скачивания!');
-                return;
-            }
-
-            const csvContent = "data:text/csv;charset=utf-8," +
-                "Time,X,Y,Z\n" +
-                motionData.map(row => `${row.time},${row.x},${row.y},${row.z}`).join("\n");
-
-            const encodedUri = encodeURI(csvContent);
-            const link = document.createElement("a");
-            link.setAttribute("href", encodedUri);
-            link.setAttribute("download", "accelerometer_data.csv");
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+        function saveVideo() {
+            const now = new Date();
+            const fileName = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}T${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.webm`;
+            
+            const blob = new Blob(recordedChunks, { type: "video/webm" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = fileName;
+            a.click();
+            URL.revokeObjectURL(url);
+            recordedChunks = [];
         }
     </script>
 </body>
