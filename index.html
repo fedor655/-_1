@@ -1,131 +1,121 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Meteor Recorder</title>
+    <title>Акселерометр</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            font-size: 16px;
+        }
+        #dataOutput {
+            margin-top: 20px;
+            font-size: 18px;
+        }
+    </style>
 </head>
 <body>
-    <h1>Meteor Camera Recorder</h1>
-    <video id="preview" autoplay playsinline></video>
-    <button id="start">Start Recording</button>
-    <button id="stop" disabled>Stop Recording</button>
-    <p id="log"></p>
-    
+    <h1>Сбор данных с акселерометра</h1>
+    <button onclick="startCollecting()">Начать сбор</button>
+    <button onclick="stopCollecting()">Остановить</button>
+    <button onclick="downloadData()">Скачать данные</button>
+    <div id="dataOutput">Ожидание данных...</div>
+
     <script>
-        const logElement = document.getElementById('log');
-        function log(message) {
-            logElement.textContent += message + '\n';
-            console.log(message);
-        }
+        let collecting = false;
+        let motionData = [];
+        let intervalId = null;
 
-        let mediaRecorder;
-        let recordedChunks = [];
-        let metadata = {};
-
-        async function requestPermissions() {
-            try {
-                log("Requesting camera permission...");
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                log("Camera permission granted.");
-                stream.getTracks().forEach(track => track.stop()); // Останавливаем поток, чтобы не блокировать камеру
-
-                log("Requesting geolocation permission...");
-                await new Promise((resolve, reject) => {
-                    navigator.geolocation.getCurrentPosition(
-                        () => resolve(),
-                        err => reject(err),
-                        { timeout: 10000 }
-                    );
-                });
-                log("Geolocation permission granted.");
-
-                if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                    log("Requesting sensor permission...");
-                    const permission = await DeviceOrientationEvent.requestPermission();
-                    if (permission === 'granted') {
-                        log("Sensor permission granted.");
-                    } else {
-                        log("Sensor permission denied.");
-                    }
+        // Проверка поддержки и запрос разрешения
+        function startCollecting() {
+            if (typeof DeviceMotionEvent !== 'undefined') {
+                if (typeof DeviceMotionEvent.requestPermission === 'function') {
+                    // Для iOS 13+
+                    DeviceMotionEvent.requestPermission()
+                        .then(permissionState => {
+                            if (permissionState === 'granted') {
+                                startMotionListener();
+                            } else {
+                                alert('Разрешение на доступ к акселерометру отклонено.');
+                            }
+                        })
+                        .catch(console.error);
                 } else {
-                    log("Sensors available without explicit permission or not supported.");
+                    // Для Android и других устройств
+                    startMotionListener();
                 }
-            } catch (error) {
-                log(`Permission request failed: ${error.message}`);
-                alert("Please grant camera, location, and sensor permissions in your browser settings.");
-                throw error;
+            } else {
+                alert('Ваш браузер или устройство не поддерживает акселерометр.');
             }
         }
 
-        async function startRecording() {
-            try {
-                log("Starting recording...");
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                document.getElementById('preview').srcObject = stream;
-                
-                mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8' });
-                mediaRecorder.ondataavailable = event => recordedChunks.push(event.data);
-                mediaRecorder.onstop = saveRecording;
-                
-                metadata.startTime = new Date().toISOString();
-                navigator.geolocation.getCurrentPosition(
-                    position => {
-                        metadata.latitude = position.coords.latitude;
-                        metadata.longitude = position.coords.longitude;
-                        log(`Geolocation: ${metadata.latitude}, ${metadata.longitude}`);
-                    },
-                    err => log(`Geolocation error: ${err.message}`)
-                );
-                
-                window.addEventListener('deviceorientation', event => {
-                    metadata.azimuth = event.alpha;
-                    metadata.elevation = event.beta;
-                    log(`Orientation: azimuth=${event.alpha}, elevation=${event.beta}`);
-                }, { once: true });
-                
-                mediaRecorder.start();
-                log("Recording started.");
-                document.getElementById('start').disabled = true;
-                document.getElementById('stop').disabled = false;
-            } catch (error) {
-                log(`Error starting recording: ${error.message}`);
+        // Начало сбора данных
+        function startMotionListener() {
+            if (!collecting) {
+                collecting = true;
+                motionData = []; // Очищаем старые данные
+                document.getElementById('dataOutput').innerText = 'Сбор данных начался...';
+
+                window.addEventListener('devicemotion', handleMotion);
+                // Собираем данные каждые 100 мс
+                intervalId = setInterval(() => {
+                    document.getElementById('dataOutput').innerText = 
+                        `Последние данные: X: ${motionData[motionData.length - 1]?.x || 0}, ` +
+                        `Y: ${motionData[motionData.length - 1]?.y || 0}, ` +
+                        `Z: ${motionData[motionData.length - 1]?.z || 0}`;
+                }, 100);
             }
         }
 
-        function stopRecording() {
-            mediaRecorder.stop();
-            document.getElementById('start').disabled = false;
-            document.getElementById('stop').disabled = true;
-            log("Recording stopped.");
-        }
-
-        function saveRecording() {
-            const blob = new Blob(recordedChunks, { type: 'video/webm' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'meteor_video.webm';
-            a.click();
-            
-            const metadataBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
-            const metadataUrl = URL.createObjectURL(metadataBlob);
-            const metadataLink = document.createElement('a');
-            metadataLink.href = metadataUrl;
-            metadataLink.download = 'metadata.json';
-            metadataLink.click();
-            log("Files saved.");
-        }
-
-        document.getElementById('start').addEventListener('click', async () => {
-            try {
-                await requestPermissions();
-                await startRecording();
-            } catch (error) {
-                log("Failed to start: " + error.message);
+        // Обработка данных акселерометра
+        function handleMotion(event) {
+            if (collecting) {
+                const accel = event.accelerationIncludingGravity || {};
+                motionData.push({
+                    time: new Date().toISOString(),
+                    x: accel.x || 0,
+                    y: accel.y || 0,
+                    z: accel.z || 0
+                });
             }
-        });
-        document.getElementById('stop').addEventListener('click', stopRecording);
+        }
+
+        // Остановка сбора
+        function stopCollecting() {
+            if (collecting) {
+                collecting = false;
+                clearInterval(intervalId);
+                window.removeEventListener('devicemotion', handleMotion);
+                document.getElementById('dataOutput').innerText = 'Сбор данных остановлен.';
+            }
+        }
+
+        // Скачивание данных в CSV
+        function downloadData() {
+            if (motionData.length === 0) {
+                alert('Нет данных для скачивания!');
+                return;
+            }
+
+            const csvContent = "data:text/csv;charset=utf-8," +
+                "Time,X,Y,Z\n" +
+                motionData.map(row => `${row.time},${row.x},${row.y},${row.z}`).join("\n");
+
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", "accelerometer_data.csv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
     </script>
 </body>
 </html>
